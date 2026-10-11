@@ -251,7 +251,8 @@ async def _soal_berikutnya(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
 async def _timeout(context: ContextTypes.DEFAULT_TYPE, chat_id: int, soal_id: int, msg_id: int):
     await asyncio.sleep(WAKTU_SOAL)
     sesi = _sesi.get(chat_id)
-    if not sesi or sesi.get("soal", {}).get("id") != soal_id:
+    soal_aktif = sesi.get("soal") if sesi else None
+    if not sesi or soal_aktif is None or soal_aktif["id"] != soal_id:
         LOGGER.info("[timeout] skip: sesi udah gak cocok (chat=%s, soal=%s)", chat_id, soal_id)
         return
     soal = db.get_soal(soal_id)
