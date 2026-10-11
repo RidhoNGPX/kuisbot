@@ -190,6 +190,7 @@ async def _lobby_countdown(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
             f"kuis batal.\n/kuis buat buka lobby lagi!",
         )
         return
+    LOGGER.info("[lobby] mulai kuis: %d peserta", len(sesi["peserta"]))
     await _mulai_kuis(context, chat_id)
 
 
@@ -236,6 +237,7 @@ async def _soal_berikutnya(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         f"⏱️ {WAKTU_SOAL} detik — ngetik jawabannya langsung!"
     )
     msg = await context.bot.send_message(chat_id, teks)
+    LOGGER.info("[soal] kirim soal %s/%s id=%s ke chat=%s", sesi["index"] + 1, len(sesi["soal_list"]), soal["id"], chat_id)
     task = asyncio.create_task(_timeout(context, chat_id, soal["id"], msg.message_id))
     sesi.update({
         "soal": soal,
@@ -249,6 +251,7 @@ async def _timeout(context: ContextTypes.DEFAULT_TYPE, chat_id: int, soal_id: in
     await asyncio.sleep(WAKTU_SOAL)
     sesi = _sesi.get(chat_id)
     if not sesi or sesi.get("soal", {}).get("id") != soal_id:
+        LOGGER.info("[timeout] skip: sesi udah gak cocok (chat=%s, soal=%s)", chat_id, soal_id)
         return
     soal = db.get_soal(soal_id)
     try:
@@ -357,12 +360,15 @@ async def jawaban_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     sesi = _sesi.get(chat_id)
     if not sesi or not update.message or "soal" not in sesi:
+        LOGGER.info("[listener] skip: gak ada sesi main (chat=%s)", chat_id)
         return
     if time.time() > sesi["deadline"]:
+        LOGGER.info("[listener] skip: waktu habis (chat=%s)", chat_id)
         return
     user = update.effective_user
     if not user or user.id not in sesi["peserta"]:
-        return  # bukan peserta lobby — diabaikan
+        LOGGER.info("[listener] skip: %s bukan peserta (chat=%s)", user.id if user else "?", chat_id)
+        return
 
     teks = update.message.text.strip()
     if len(teks) < 1 or len(teks) > 60:
@@ -371,6 +377,7 @@ async def jawaban_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     soal = sesi["soal"]
     kunci = soal["opsi_jawaban"].strip().lower()
     tebakan = " ".join(teks.lower().split()).strip("!?.,;:")
+    LOGGER.info("[listener] tebakan %s: %r vs kunci %r", user.first_name, tebakan, kunci)
     if tebakan != kunci:
         return  # salah — biarkan pemain lain mencoba
 
