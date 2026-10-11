@@ -364,9 +364,9 @@ def _normalisasi(s: str) -> str:
     s = s.strip("'\"“”‘’")              # kutip di ujung
     s = s.strip("!?.,;:")               # tanda baca di ujung
     s = re.sub(r"^(sekitar|kira-kira|kurang lebih|about)\s+", "", s)
-    s = s.replace(",", "")              # 20,000 -> 20000 ; Louvre, Paris -> louvre paris
+    s = s.replace("-", " ")             # kupu-kupu == kupu kupu
+    s = re.sub(r"[^a-z0-9\s]", "", s)   # buang sisa simbol
     s = " ".join(s.split())             # rapikan spasi
-    # buang keterangan tambahan setelah koma jika masih panjang? tidak — biarkan persis.
     return s
 
 
@@ -392,7 +392,11 @@ async def jawaban_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kunci = _normalisasi(soal["opsi_jawaban"])
     tebakan = _normalisasi(teks)
     LOGGER.info("[listener] tebakan %s: %r vs kunci %r", user.first_name, tebakan, kunci)
-    if tebakan != kunci:
+    # cocok penuh ATAU tebakan 1 kata yang muncul di kunci (mis. 'edison' utk 'thomas alva edison')
+    cocok = tebakan == kunci or (
+        len(tebakan.split()) == 1 and len(tebakan) >= 4 and tebakan in kunci.split()
+    )
+    if not cocok:
         return  # salah — biarkan pemain lain mencoba
 
     # BENAR & paling cepat!
