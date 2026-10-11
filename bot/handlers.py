@@ -364,6 +364,8 @@ def _normalisasi(s: str) -> str:
     s = s.strip("'\"“”‘’")              # kutip di ujung
     s = s.strip("!?.,;:")               # tanda baca di ujung
     s = re.sub(r"^(sekitar|kira-kira|kurang lebih|about)\s+", "", s)
+    # buang gelar di awal
+    s = re.sub(r"^(ir\.|hj\.|drs\.|prof\.|dr\.|ra\.)\s+", "", s)
     s = s.replace("-", " ")             # kupu-kupu == kupu kupu
     s = re.sub(r"[^a-z0-9\s]", "", s)   # buang sisa simbol
     s = " ".join(s.split())             # rapikan spasi
