@@ -1,6 +1,8 @@
 """Bot Kuis Telegram — main entry."""
+import asyncio
 import logging
 import os
+from datetime import datetime
 
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder
@@ -12,6 +14,27 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
 )
 LOGGER = logging.getLogger("kuisbot")
+
+PROCESS_START = datetime.now()
+
+
+async def post_init(application):
+    """Notifikasi startup ke LOG_CHAT (kalau diisi di .env)."""
+    log_chat = os.getenv("LOG_CHAT")
+    if not log_chat:
+        return
+    try:
+        await application.bot.send_message(
+            chat_id=log_chat,
+            text=(
+                "🟢 kuisbot online!\n"
+                f"📚 {db.soal_count()} soal siap\n"
+                f"🕐 {PROCESS_START.strftime('%d %b %Y %H:%M')}"
+            ),
+        )
+        LOGGER.info("Notifikasi startup terkirim ke LOG_CHAT")
+    except Exception as e:
+        LOGGER.warning("Gagal kirim notif startup ke LOG_CHAT: %s", e)
 
 
 def main():
@@ -28,7 +51,7 @@ def main():
 
         LOGGER.info("Seed selesai: %s soal", db.soal_count())
 
-    app = ApplicationBuilder().token(token).build()
+    app = ApplicationBuilder().token(token).post_init(post_init).build()
     for handler in get_handlers():
         app.add_handler(handler)
 
