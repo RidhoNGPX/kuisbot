@@ -1,4 +1,13 @@
-"""Command & quiz handlers — mode RACE: ngetik jawaban manual, 15 detik, sesi 10-15 soal."""
+"""Command & quiz handlers — mode RACE + LOBBY.
+
+Alur:
+  /kuis [kategori]  (admin)  -> buka lobby 2 menit
+  /ikutkuis                  -> user join lobby (min 2 orang)
+  setelah 2 menit            -> kalau >=2 peserta: kuis mulai otomatis,
+                                kalau <2: batal
+  jawab = ngetik jawabannya langsung, 15 detik per soal,
+  hanya peserta lobby yang bisa dapat poin.
+"""
 import asyncio
 import logging
 import os
@@ -6,16 +15,18 @@ import random
 import time
 
 from telegram import Update
-from telegram.constants import ParseMode
 from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters
 
 from bot import db
 
 LOGGER = logging.getLogger(__name__)
 
-# Sesi kuis aktif per chat
+# State per chat:
+#   {"fase": "lobby", ...} atau {"fase": "main", ...}
 _sesi: dict[int, dict] = {}
 
+LOBBY_DETIK = 120         # 2 menit
+MIN_PESERTA = 2
 SOAL_PER_SESI_MIN = 10
 SOAL_PER_SESI_MAX = 15
 WAKTU_SOAL = 15           # detik per soal
@@ -27,6 +38,7 @@ def get_handlers() -> list:
     return [
         CommandHandler("start", start),
         CommandHandler("kuis", kuis),
+        CommandHandler("ikutkuis", ikutkuis),
         CommandHandler("stop", stop),
         CommandHandler("skor", skor),
         CommandHandler("leaderboard", leaderboard_cmd),
@@ -36,17 +48,19 @@ def get_handlers() -> list:
     ]
 
 
-def _admin(update: Update) -> bool:
-    return bool(update.effective_user) and update.effective_user.id == int(
-        os.getenv("OWNER_ID", "0")
-    )
-
-
-def _esc(s: str) -> str:
-    """Escape karakter MarkdownV2 di teks bebas."""
-    for ch in "_*[]()~`>#+-=|{}.!":
-        s = s.replace(ch, f"\\{ch}")
-    return s
+async def _admin_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    user = update.effective_user
+    if not user:
+        return False
+    if user.id == int(os.getenv("OWNER_ID", "0")):
+        return True
+    try:
+        member = await context.bot.get_chat_member(
+            update.effective_chat.id, user.id
+        )
+        return member.status in ("administrator", "creator")
+    except Exception:
+        return False
 
 
 # ---------- commands ----------
@@ -57,13 +71,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text(
         "🎯 Kuisbot 🦫\n\n"
-        "/kuis [kategori] — mulai kuis (sesi 10-15 soal)\n"
+        "/kuis [kategori] — (admin) buka lobby kuis\n"
+        "/ikutkuis — daftar ikut kuis\n"
         "/kategori — daftar kategori\n"
         "/skor — skor kamu\n"
         "/leaderboard — top 10\n"
-        "/stop — hentikan sesi\n\n"
-        "⚡ Mode RACE: jawab dengan NGETIK jawabannya langsung (bukan huruf pilihan!). "
-        "Waktu cuma 15 detik per soal — yang ngetik benar duluan, dapat poin terbesar!",
+        "/stop — (admin) hentikan sesi\n\n"
+        "⚡ Cara main:\n"
+        "1. Admin /kuis → lobby dibuka 2 menit\n"
+        "2. Ketik /ikutkuis buat daftar (min 2 orang)\n"
+        "3. Kuis mulai otomatis — ngetik jawabannya langsung!\n"
+        "4. 15 detik per soal, yang benar duluan dapat poin terbesar"
     )
 
 
@@ -80,34 +98,124 @@ async def kategori_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def kuis(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin) Buka lobby kuis."""
     if not update.message or not update.effective_chat:
         return
     chat_id = update.effective_chat.id
     if chat_id in _sesi:
-        await update.message.reply_text("Sesi masih jalan! Tunggu selesai atau /stop 🦫")
+        await update.message.reply_text(
+            "Sesi/lobby masih jalan! Tunggu selesai atau /stop 🦫"
+        )
+        return
+    if not await _admin_check(update, context):
+        await update.message.reply_text("Khusus admin 🦫")
         return
 
     kategori = " ".join(context.args).strip().lower() or None
-    jumlah = random.randint(SOAL_PER_SESI_MIN, SOAL_PER_SESI_MAX)
-    soal_list = db.ambil_soal_sesi(kategori, jumlah)
-    if not soal_list:
+    if db.soal_count(kategori) < SOAL_PER_SESI_MIN:
         await update.message.reply_text(
-            f"Belum ada soal{f' kategori {kategori}' if kategori else ''}. "
-            "Coba /kategori buat lihat yang tersedia."
+            f"Soal{f' kategori {kategori}' if kategori else ''} kurang "
+            f"(min {SOAL_PER_SESI_MIN}). Coba /kategori 🦫"
         )
         return
 
+    user = update.effective_user
     _sesi[chat_id] = {
+        "fase": "lobby",
+        "kategori": kategori,
+        "peserta": {user.id: user.first_name} if user else {},
+        "host": user.first_name if user else "?",
+        "host_id": user.id if user else 0,
+        "mulai_task": None,
+    }
+    sisa_menit = LOBBY_DETIK // 60
+    await update.message.reply_text(
+        f"🔔 LOBBY KUIS DIBUKA!\n"
+        f"📚 Kategori: {kategori or 'campuran'}\n"
+        f"👤 Host: {user.first_name}\n\n"
+        f"Ketik /ikutkuis buat gabung!\n"
+        f"⏳ Lobby tutup {sisa_menit} menit lagi — min {MIN_PESERTA} orang "
+        f"biar kuis jalan."
+    )
+    _sesi[chat_id]["mulai_task"] = asyncio.create_task(
+        _lobby_countdown(context, chat_id)
+    )
+
+
+async def ikutkuis(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_user:
+        return
+    chat_id = update.effective_chat.id
+    sesi = _sesi.get(chat_id)
+    if not sesi or sesi.get("fase") != "lobby":
+        await update.message.reply_text(
+            "Nggak ada lobby yang buka. Admin bisa /kuis dulu 🦫"
+        )
+        return
+    user = update.effective_user
+    if user.id in sesi["peserta"]:
+        await update.message.reply_text("Kamu udah terdaftar 😄")
+        return
+    sesi["peserta"][user.id] = user.first_name
+    n = len(sesi["peserta"])
+    sisa = max(0, int(LOBBY_DETIK - (time.time() - sesi.get("lobby_start", time.time()))))
+    await update.message.reply_text(
+        f"✅ {user.first_name} ikut kuis! ({n} peserta)\n"
+        f"⏳ sisa ~{sisa}s"
+    )
+
+
+async def _lobby_countdown(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    sesi = _sesi.get(chat_id)
+    if not sesi:
+        return
+    sesi["lobby_start"] = time.time()
+    # countdown 60s sekali di tengah
+    await asyncio.sleep(LOBBY_DETIK - 60)
+    sesi = _sesi.get(chat_id)
+    if sesi and sesi["fase"] == "lobby":
+        n = len(sesi["peserta"])
+        await context.bot.send_message(
+            chat_id, f"⏳ 1 menit lagi! Baru {n} peserta. /ikutkuis buruan!"
+        )
+    await asyncio.sleep(60)
+    sesi = _sesi.get(chat_id)
+    if not sesi or sesi["fase"] != "lobby":
+        return
+    if len(sesi["peserta"]) < MIN_PESERTA:
+        _sesi.pop(chat_id, None)
+        await context.bot.send_message(
+            chat_id,
+            f"😢 Lobby ditutup — peserta kurang dari {MIN_PESERTA} orang, "
+            f"kuis batal.\n/kuis buat buka lobby lagi!",
+        )
+        return
+    await _mulai_kuis(context, chat_id)
+
+
+async def _mulai_kuis(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    sesi = _sesi.get(chat_id)
+    if not sesi:
+        return
+    jumlah = random.randint(SOAL_PER_SESI_MIN, SOAL_PER_SESI_MAX)
+    soal_list = db.ambil_soal_sesi(sesi["kategori"], jumlah)
+    if not soal_list:
+        _sesi.pop(chat_id, None)
+        await context.bot.send_message(chat_id, "Soal kurang, kuis batal 🦫")
+        return
+    sesi.update({
+        "fase": "main",
         "soal_list": soal_list,
         "index": -1,
-        "skor_sesi": {},  # user_id: [nama, poin, benar]
-        "host": update.effective_user.first_name if update.effective_user else "?",
-    }
-    await update.message.reply_text(
-        f"🔥 SESI KUIS MULAI!\n"
-        f"📚 {len(soal_list)} soal{f' — {kategori}' if kategori else ' — campuran'}\n"
-        f"⏱️ {WAKTU_SOAL} detik per soal\n"
-        f"✍️ Ketik jawabannya langsung!"
+        "skor_sesi": {uid: [nama, 0, 0] for uid, nama in sesi["peserta"].items()},
+    })
+    daftar = ", ".join(sesi["peserta"].values())
+    await context.bot.send_message(
+        chat_id,
+        f"🔥 KUIS MULAI!\n"
+        f"📚 {len(soal_list)} soal — ⏱️ {WAKTU_SOAL}s per soal\n"
+        f"👥 Peserta: {daftar}\n"
+        f"✍️ Ngetik jawabannya langsung — gas!",
     )
     await asyncio.sleep(2)
     await _soal_berikutnya(context, chat_id)
@@ -115,7 +223,7 @@ async def kuis(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _soal_berikutnya(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     sesi = _sesi.get(chat_id)
-    if not sesi:
+    if not sesi or sesi.get("fase") != "main":
         return
     sesi["index"] += 1
     if sesi["index"] >= len(sesi["soal_list"]):
@@ -162,11 +270,16 @@ async def _timeout(context: ContextTypes.DEFAULT_TYPE, chat_id: int, soal_id: in
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.effective_chat:
         return
+    if not await _admin_check(update, context):
+        await update.message.reply_text("Khusus admin 🦫")
+        return
     chat_id = update.effective_chat.id
     sesi = _sesi.pop(chat_id, None)
     if sesi:
         if sesi.get("task"):
             sesi["task"].cancel()
+        if sesi.get("mulai_task"):
+            sesi["mulai_task"].cancel()
         await update.message.reply_text("Sesi kuis dihentikan 🦫")
     else:
         await update.message.reply_text("Nggak ada sesi kuis yang jalan.")
@@ -177,7 +290,7 @@ async def skor(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     row = db.user_skor(update.effective_chat.id, update.effective_user.id)
     if not row:
-        await update.message.reply_text("Kamu belum main. /kuis dulu gas 🦫")
+        await update.message.reply_text("Kamu belum main. /ikutkuis dulu gas 🦫")
         return
     await update.message.reply_text(
         f"📊 Skor {row['nama']}:\n"
@@ -205,8 +318,8 @@ async def leaderboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def addsoal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
-    if not _admin(update):
-        await update.message.reply_text("Owner only 🦫")
+    if not await _admin_check(update, context):
+        await update.message.reply_text("Khusus admin 🦫")
         return
     raw = update.message.text or ""
     if "\n" not in raw:
@@ -237,7 +350,7 @@ async def addsoal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ---------- jawaban (race mode) ----------
+# ---------- jawaban (race mode, peserta lobby only) ----------
 
 
 async def jawaban_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -247,27 +360,28 @@ async def jawaban_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if time.time() > sesi["deadline"]:
         return
+    user = update.effective_user
+    if not user or user.id not in sesi["peserta"]:
+        return  # bukan peserta lobby — diabaikan
 
     teks = update.message.text.strip()
-    if len(teks) < 2 or len(teks) > 60:
+    if len(teks) < 1 or len(teks) > 60:
         return
 
     soal = sesi["soal"]
     kunci = soal["opsi_jawaban"].strip().lower()
     tebakan = " ".join(teks.lower().split()).strip("!?.,;:")
     if tebakan != kunci:
-        return  # salah — biarkan pemain lain mencoba, jawaban tidak dibocorkan
+        return  # salah — biarkan pemain lain mencoba
 
     # BENAR & paling cepat!
     if sesi.get("task"):
         sesi["task"].cancel()
     _sesi.pop(chat_id, None)
 
-    user = update.effective_user
     sisa = max(0, int(sesi["deadline"] - time.time()))
     poin = POIN_DASAR + sisa * BONUS_WAKTU
     streak = db.add_skor(chat_id, user.id, user.first_name, poin, benar=True)
-    # sesi udah di-pop, simpan skor sesi manual buat rekap akhir
     sesi["skor_sesi"][user.id] = sesi["skor_sesi"].get(user.id, [user.first_name, 0, 0])
     sesi["skor_sesi"][user.id][1] += poin
     sesi["skor_sesi"][user.id][2] += 1
@@ -288,6 +402,7 @@ async def _akhiri_sesi(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     if not sesi:
         return
     hasil = sorted(sesi["skor_sesi"].values(), key=lambda x: -x[1])
+    hasil = [h for h in hasil if h[1] > 0]
     if not hasil:
         await context.bot.send_message(
             chat_id, "Sesi selesai. Nggak ada yang jawab bener 😢🦫\n/kuis buat main lagi!"
