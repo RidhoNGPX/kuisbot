@@ -64,6 +64,14 @@ async def _admin_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
         return False
 
 
+
+
+def _nama(user) -> str:
+    """Nama tampilan + mention: @username kalau ada, kalau tidak link by ID."""
+    if user.username:
+        return f"@{user.username}"
+    return f'<a href="tg://user?id={user.id}">{user.first_name}</a>'
+
 # ---------- commands ----------
 
 
@@ -124,7 +132,7 @@ async def kuis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _sesi[chat_id] = {
         "fase": "lobby",
         "kategori": kategori,
-        "peserta": {user.id: user.first_name} if user else {},
+        "peserta": {user.id: (user.first_name, _nama(user))} if user else {},
         "host": user.first_name if user else "?",
         "host_id": user.id if user else 0,
         "mulai_task": None,
@@ -157,12 +165,13 @@ async def ikutkuis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id in sesi["peserta"]:
         await update.message.reply_text("Kamu udah terdaftar 😄")
         return
-    sesi["peserta"][user.id] = user.first_name
+    sesi["peserta"][user.id] = (user.first_name, _nama(user))
     n = len(sesi["peserta"])
     sisa = max(0, int(LOBBY_DETIK - (time.time() - sesi.get("lobby_start", time.time()))))
     await update.message.reply_text(
-        f"✅ {user.first_name} ikut kuis! ({n} peserta)\n"
-        f"⏳ sisa ~{sisa}s"
+        f"✅ {_nama(user)} ikut kuis! ({n} peserta)\n"
+        f"⏳ sisa ~{sisa}s",
+        parse_mode="HTML",
     )
 
 
@@ -176,8 +185,13 @@ async def _lobby_countdown(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     sesi = _sesi.get(chat_id)
     if sesi and sesi["fase"] == "lobby":
         n = len(sesi["peserta"])
+        tags = " ".join(p[1] for p in sesi["peserta"].values())
         await context.bot.send_message(
-            chat_id, f"⏳ 1 menit lagi! Baru {n} peserta. /ikutkuis buruan!"
+            chat_id,
+            f"⏳ 1 MENIT LAGI! Baru {n} peserta.\n"
+            f"{tags} — siap-siap! 🎯\n"
+            f"Yang belum: /ikutkuis buruan!",
+            parse_mode="HTML",
         )
     await asyncio.sleep(60)
     sesi = _sesi.get(chat_id)
@@ -211,13 +225,14 @@ async def _mulai_kuis(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         "index": -1,
         "skor_sesi": {uid: [nama, 0, 0] for uid, nama in sesi["peserta"].items()},
     })
-    daftar = ", ".join(sesi["peserta"].values())
+    daftar = " ".join(p[1] for p in sesi["peserta"].values())
     await context.bot.send_message(
         chat_id,
         f"🔥 KUIS MULAI!\n"
         f"📚 {len(soal_list)} soal — ⏱️ {WAKTU_SOAL}s per soal\n"
-        f"👥 Peserta: {daftar}\n"
+        f"👥 {daftar}\n"
         f"✍️ Ngetik jawabannya langsung — gas!",
+        parse_mode="HTML",
     )
     await asyncio.sleep(2)
     await _soal_berikutnya(context, chat_id)
@@ -415,7 +430,8 @@ async def jawaban_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _sesi[chat_id] = sesi
     bonus = f"\n🔥 Streak {streak}!" if streak >= 3 else ""
     await update.message.reply_text(
-        f"⚡ {user.first_name} paling cepet! +{poin} poin (sisa {sisa}s){bonus}"
+        f"⚡ {_nama(user)} paling cepet! +{poin} poin (sisa {sisa}s){bonus}",
+        parse_mode="HTML",
     )
     await asyncio.sleep(2)
     await _soal_berikutnya(context, chat_id)
