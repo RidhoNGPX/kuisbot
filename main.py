@@ -5,6 +5,7 @@ import os
 from dotenv import load_dotenv
 from telegram.ext import ApplicationBuilder
 
+from bot import db
 from bot.handlers import get_handlers
 
 logging.basicConfig(
@@ -18,6 +19,14 @@ def main():
     token = os.getenv("BOT_TOKEN")
     if not token:
         raise SystemExit("BOT_TOKEN belum diisi di .env")
+
+    # Auto-init DB + seed soal kalau masih kosong
+    db.init_db()
+    if db.soal_count() == 0:
+        LOGGER.info("DB kosong — seeding soal...")
+        import seed  # noqa: F401 — seed.py jalan sendiri pas diimport
+
+        LOGGER.info("Seed selesai: %s soal", db.soal_count())
 
     app = ApplicationBuilder().token(token).build()
     for handler in get_handlers():

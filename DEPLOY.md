@@ -36,7 +36,7 @@ DB_PATH=data/kuisbot.db
 ## 4. Seed soal (sekali aja)
 
 ```bash
-python seed.py    # → 192 soal masuk DB
+*(tidak perlu — seed otomatis saat bot pertama kali jalan)*
 ```
 
 ## 5. Tes manual dulu
