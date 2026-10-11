@@ -28,8 +28,8 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 kategori TEXT NOT NULL,
                 pertanyaan TEXT NOT NULL,
-                opsi TEXT NOT NULL,          -- JSON list 4 opsi
-                jawaban INTEGER NOT NULL,    -- index 0-3
+                opsi_jawaban TEXT NOT NULL,  -- teks jawaban benar (dibandingin persis, case-insensitive)
+                opsi_lain TEXT NOT NULL,     -- JSON list opsi pengecoh
                 dibuat_oleh INTEGER,
                 created_at TEXT DEFAULT (datetime('now'))
             );
@@ -64,26 +64,40 @@ def kategori_list() -> list[str]:
         return [f"{r['kategori']} ({r['n']} soal)" for r in rows]
 
 
-def random_soal(kategori: str | None = None) -> sqlite3.Row | None:
+def ambil_soal_sesi(kategori: str | None, jumlah: int) -> list[sqlite3.Row]:
+    """Ambil N soal random untuk satu sesi (tanpa duplikat)."""
     with _lock, _conn() as c:
         if kategori:
             return c.execute(
-                "SELECT * FROM soal WHERE kategori=? ORDER BY RANDOM() LIMIT 1",
-                (kategori,),
-            ).fetchone()
-        return c.execute("SELECT * FROM soal ORDER BY RANDOM() LIMIT 1").fetchone()
+                "SELECT * FROM soal WHERE kategori=? ORDER BY RANDOM() LIMIT ?",
+                (kategori, jumlah),
+            ).fetchall()
+        return c.execute(
+            "SELECT * FROM soal ORDER BY RANDOM() LIMIT ?", (jumlah,)
+        ).fetchall()
+
+
+def random_soal(kategori: str | None = None) -> sqlite3.Row | None:
+    rows = ambil_soal_sesi(kategori, 1)
+    return rows[0] if rows else None
 
 
 def add_soal(
-    kategori: str, pertanyaan: str, opsi: list[str], jawaban: int, user_id: int
+    kategori: str, pertanyaan: str, opsi_jawaban: str, opsi_lain: list[str], user_id: int
 ) -> int:
     import json
 
     with _lock, _conn() as c:
         cur = c.execute(
-            "INSERT INTO soal (kategori, pertanyaan, opsi, jawaban, dibuat_oleh) "
+            "INSERT INTO soal (kategori, pertanyaan, opsi_jawaban, opsi_lain, dibuat_oleh) "
             "VALUES (?,?,?,?,?)",
-            (kategori, pertanyaan, json.dumps(opsi, ensure_ascii=False), jawaban, user_id),
+            (
+                kategori,
+                pertanyaan,
+                opsi_jawaban,
+                json.dumps(opsi_lain, ensure_ascii=False),
+                user_id,
+            ),
         )
         return cur.lastrowid or 0
 
