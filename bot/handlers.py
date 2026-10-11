@@ -4,7 +4,7 @@ Alur:
   /kuis [kategori]  (admin)  -> buka lobby 2 menit
   /ikutkuis                  -> user join lobby (min 2 orang)
   setelah 2 menit            -> kalau >=2 peserta: kuis mulai otomatis,
-                                kalau <2: batal
+                                kalau kurang dari MIN_PESERTA: batal
   jawab = ngetik jawabannya langsung, 15 detik per soal,
   hanya peserta lobby yang bisa dapat poin.
 """
@@ -26,7 +26,7 @@ LOGGER = logging.getLogger(__name__)
 _sesi: dict[int, dict] = {}
 
 LOBBY_DETIK = 120         # 2 menit
-MIN_PESERTA = 2
+MIN_PESERTA = int(os.getenv("MIN_PESERTA", "2"))
 SOAL_PER_SESI_MIN = 10
 SOAL_PER_SESI_MAX = 15
 WAKTU_SOAL = 15           # detik per soal
