@@ -45,6 +45,8 @@ def get_handlers() -> list:
         CommandHandler("leaderboard", leaderboard_cmd),
         CommandHandler("kategori", kategori_cmd),
         CommandHandler("addsoal", addsoal),
+        CommandHandler("stat", stat_cmd),
+        CommandHandler("badges", badges_cmd),
         MessageHandler(filters.TEXT & (~filters.COMMAND), jawaban_listener),
     ]
 
@@ -85,6 +87,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/kategori — daftar kategori\n"
         "/skor — skor kamu\n"
         "/leaderboard — top 10\n"
+        "/stat — statistik lengkap kamu\n"
+        "/badges — koleksi badge\n"
         "/stop — (admin) hentikan sesi\n\n"
         "⚡ Cara main:\n"
         "1. Admin /kuis → lobby dibuka 2 menit\n"
@@ -414,6 +418,7 @@ async def jawaban_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
         len(tebakan.split()) == 1 and len(tebakan) >= 4 and tebakan in kunci.split()
     )
     if not cocok:
+        db.catat_jawaban(chat_id, user.id, soal["id"], soal["kategori"], False, WAKTU_SOAL)
         return  # salah — biarkan pemain lain mencoba
 
     # BENAR & paling cepat!
@@ -424,13 +429,21 @@ async def jawaban_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sisa = max(0, int(sesi["deadline"] - time.time()))
     poin = POIN_DASAR + sisa * BONUS_WAKTU
     streak = db.add_skor(chat_id, user.id, user.first_name, poin, benar=True)
+    db.catat_jawaban(chat_id, user.id, soal["id"], soal["kategori"], True, WAKTU_SOAL - sisa)
+    if sisa >= WAKTU_SOAL - 3:  # jawab dalam <=3 detik
+        db.catat_jawaban_kilat(chat_id, user.id)
     sesi["skor_sesi"][user.id] = sesi["skor_sesi"].get(user.id, [user.first_name, 0, 0])
     sesi["skor_sesi"][user.id][1] += poin
     sesi["skor_sesi"][user.id][2] += 1
     _sesi[chat_id] = sesi
     bonus = f"\n🔥 Streak {streak}!" if streak >= 3 else ""
+    # cek badge baru
+    badge_baru = db.badge_cek_dan_beri(chat_id, user.id, user.first_name)
+    badge_txt = ""
+    for b in badge_baru:
+        badge_txt += f"\n🏅 Badge baru: {b['emoji']} {b['nama']}!"
     await update.message.reply_text(
-        f"⚡ {_nama(user)} paling cepet! +{poin} poin (sisa {sisa}s){bonus}",
+        f"⚡ {_nama(user)} paling cepet! +{poin} poin (sisa {sisa}s){bonus}{badge_txt}",
         parse_mode="HTML",
     )
     await asyncio.sleep(2)
@@ -456,5 +469,61 @@ async def _akhiri_sesi(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         f"{medal[i] if i < 3 else f'{i + 1}.'} {h[0]} — {h[1]} poin ({h[2]} benar)"
         for i, h in enumerate(hasil[:10])
     )
+    # juara + badge
+    juara_id = next(uid for uid, v in sesi["skor_sesi"].items() if v is hasil[0])
+    db.catat_juara(chat_id, juara_id)
+    badge_txt = ""
+    for uid, v in sesi["skor_sesi"].items():
+        for b in db.badge_cek_dan_beri(chat_id, uid, v[0]):
+            badge_txt += f"\n🏅 {b['emoji']} {v[0]} dapat badge {b['nama']}!"
+    teks += badge_txt
     teks += "\n\n/kuis buat main lagi 🦫"
     await context.bot.send_message(chat_id, teks)
+
+
+# ---------- statistik & badge ----------
+
+
+async def stat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_user:
+        return
+    st = db.stat_user(update.effective_chat.id, update.effective_user.id)
+    if not st:
+        await update.message.reply_text("Kamu belum main. /ikutkuis dulu 🦫")
+        return
+    teks = (
+        f"📊 Statistik {st['nama']}\n\n"
+        f"🏆 Rank: #{st['rank']} dari {st['total_pemain']} pemain\n"
+        f"💎 Poin: {st['poin']}\n"
+        f"✅ Benar: {st['benar']} | ❌ Salah: {st['salah']}\n"
+        f"🎯 Winrate: {st['winrate']}%\n"
+        f"🔥 Best streak: {st['best_streak']}\n"
+        f"👑 Juara sesi: {st['juara']}x\n"
+        f"⚡ Jawaban kilat (<3s): {st['jawaban_kilat']}x\n"
+    )
+    if st.get("rata_detik"):
+        teks += f"⏱️ Rata-rata jawab: {st['rata_detik']}s\n"
+    if st.get("kategori_kuat"):
+        teks += f"💪 Terkuat: {st['kategori_kuat']}"
+        if st.get("kategori_lemah"):
+            teks += f" | 📚 Perlu belajar: {st['kategori_lemah']}"
+    # badge count
+    n_badge = len(db.badge_user(update.effective_chat.id, update.effective_user.id))
+    teks += f"\n🏅 Badge: {n_badge}/{len(db.BADGES)} — /badges buat lihat"
+    await update.message.reply_text(teks)
+
+
+async def badges_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_user:
+        return
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    punya = set(db.badge_user(chat_id, user_id))
+    baris = []
+    for key, b in db.BADGES.items():
+        if key in punya:
+            baris.append(f"{b['emoji']} {b['nama']} ✅")
+        else:
+            baris.append(f"🔲 {b['nama']} — {b['desc']}")
+    teks = f"🏅 Koleksi Badge ({len(punya)}/{len(db.BADGES)})\n\n" + "\n".join(baris)
+    await update.message.reply_text(teks)
