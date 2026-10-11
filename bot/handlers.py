@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import random
+import re
 import time
 
 from telegram import Update
@@ -356,6 +357,18 @@ async def addsoal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- jawaban (race mode, peserta lobby only) ----------
 
 
+def _normalisasi(s: str) -> str:
+    """Samakan bentuk jawaban & tebakan biar matching gak rewel."""
+    s = s.lower().strip()
+    s = s.strip("'\"“”‘’")              # kutip di ujung
+    s = s.strip("!?.,;:")               # tanda baca di ujung
+    s = re.sub(r"^(sekitar|kira-kira|kurang lebih|about)\s+", "", s)
+    s = s.replace(",", "")              # 20,000 -> 20000 ; Louvre, Paris -> louvre paris
+    s = " ".join(s.split())             # rapikan spasi
+    # buang keterangan tambahan setelah koma jika masih panjang? tidak — biarkan persis.
+    return s
+
+
 async def jawaban_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     sesi = _sesi.get(chat_id)
@@ -375,8 +388,8 @@ async def jawaban_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     soal = sesi["soal"]
-    kunci = soal["opsi_jawaban"].strip().lower()
-    tebakan = " ".join(teks.lower().split()).strip("!?.,;:")
+    kunci = _normalisasi(soal["opsi_jawaban"])
+    tebakan = _normalisasi(teks)
     LOGGER.info("[listener] tebakan %s: %r vs kunci %r", user.first_name, tebakan, kunci)
     if tebakan != kunci:
         return  # salah — biarkan pemain lain mencoba
