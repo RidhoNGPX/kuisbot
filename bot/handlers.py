@@ -28,8 +28,8 @@ _sesi: dict[int, dict] = {}
 
 LOBBY_DETIK = 120         # 2 menit
 MIN_PESERTA = int(os.getenv("MIN_PESERTA", "2"))
-SOAL_PER_SESI_MIN = 10
-SOAL_PER_SESI_MAX = 15
+SOAL_PER_SESI_MIN = 15
+SOAL_PER_SESI_MAX = 20
 WAKTU_SOAL = 15           # detik per soal
 POIN_DASAR = 100
 BONUS_WAKTU = 6           # poin ekstra per detik sisa
