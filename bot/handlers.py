@@ -227,7 +227,7 @@ async def _mulai_kuis(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         "fase": "main",
         "soal_list": soal_list,
         "index": -1,
-        "skor_sesi": {uid: [nama, 0, 0] for uid, nama in sesi["peserta"].items()},
+        "skor_sesi": {uid: [p[1], 0, 0] for uid, p in sesi["peserta"].items()},
     })
     daftar = " ".join(p[1] for p in sesi["peserta"].values())
     await context.bot.send_message(
@@ -432,7 +432,7 @@ async def jawaban_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.catat_jawaban(chat_id, user.id, soal["id"], soal["kategori"], True, WAKTU_SOAL - sisa)
     if sisa >= WAKTU_SOAL - 3:  # jawab dalam <=3 detik
         db.catat_jawaban_kilat(chat_id, user.id)
-    sesi["skor_sesi"][user.id] = sesi["skor_sesi"].get(user.id, [user.first_name, 0, 0])
+    sesi["skor_sesi"][user.id] = sesi["skor_sesi"].get(user.id, [_nama(user), 0, 0])
     sesi["skor_sesi"][user.id][1] += poin
     sesi["skor_sesi"][user.id][2] += 1
     _sesi[chat_id] = sesi
@@ -474,7 +474,7 @@ async def _akhiri_sesi(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     db.catat_juara(chat_id, juara_id)
     badge_txt = ""
     for uid, v in sesi["skor_sesi"].items():
-        for b in db.badge_cek_dan_beri(chat_id, uid, v[0]):
+        for b in db.badge_cek_dan_beri(chat_id, uid, v[0].replace("@", "")):
             badge_txt += f"\n🏅 {b['emoji']} {v[0]} dapat badge {b['nama']}!"
     teks += badge_txt
     teks += "\n\n/kuis buat main lagi 🦫"
