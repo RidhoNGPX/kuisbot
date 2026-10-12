@@ -391,6 +391,33 @@ def _normalisasi(s: str) -> str:
     return s
 
 
+def _jawaban_cocok(tebakan: str, kunci: str) -> bool:
+    """Matching santai: penuh, 1 kata kunci, cuplikan frasa, atau typo aman."""
+    if not tebakan or not kunci:
+        return False
+    if tebakan == kunci:
+        return True
+    t_kata, k_kata = tebakan.split(), kunci.split()
+    # 1 kata tebakan ada di kata kunci ('edison' utk 'thomas alva edison')
+    if len(t_kata) == 1 and len(tebakan) >= 4 and tebakan in k_kata:
+        return True
+    # tebakan/cuplikan frasa masuk satu sama lain (jawaban panjang dicupin)
+    if len(tebakan) >= 4 and (tebakan in kunci or kunci in tebakan):
+        return True
+    # semua kata tebakan (>=4 huruf) muncul di kunci ('thomas edison' utk 'thomas alva edison')
+    kata_penting = [w for w in t_kata if len(w) >= 4]
+    if kata_penting and all(w in k_kata for w in kata_penting):
+        return True
+    # typo: >=80% mirip dengan salah satu kata kunci
+    import difflib
+    if len(t_kata) == 1 and len(tebakan) >= 5:
+        import difflib
+        threshold = 0.85 if len(kunci) <= 8 else 0.8
+        return difflib.SequenceMatcher(None, tebakan, max(k_kata, key=len)).ratio() >= threshold
+    # frasa multi-kata: keseluruhan >=85% mirip
+    return difflib.SequenceMatcher(None, tebakan, kunci).ratio() >= 0.85
+
+
 async def jawaban_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     sesi = _sesi.get(chat_id)
@@ -413,10 +440,7 @@ async def jawaban_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kunci = _normalisasi(soal["opsi_jawaban"])
     tebakan = _normalisasi(teks)
     LOGGER.info("[listener] tebakan %s: %r vs kunci %r", user.first_name, tebakan, kunci)
-    # cocok penuh ATAU tebakan 1 kata yang muncul di kunci (mis. 'edison' utk 'thomas alva edison')
-    cocok = tebakan == kunci or (
-        len(tebakan.split()) == 1 and len(tebakan) >= 4 and tebakan in kunci.split()
-    )
+    cocok = _jawaban_cocok(tebakan, kunci)
     if not cocok:
         db.catat_jawaban(chat_id, user.id, soal["id"], soal["kategori"], False, WAKTU_SOAL)
         return  # salah — biarkan pemain lain mencoba
